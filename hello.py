@@ -4,8 +4,20 @@ import re
 import time
 import random
 import os
+import shutil
+import glob
+from pathlib import Path
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from rembg import remove
+import pillow_heif
+
+# Registrar soporte para HEIF/AVIF
+pillow_heif.register_heif_opener()
 
 # --- CONFIGURACIÓN ---
 
@@ -19,24 +31,149 @@ HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
+# --- CONFIGURACIÓN AUTOMATIZACIÓN ---
+
+# Ruta de Downloads del usuario
+DOWNLOADS_PATH = Path.home() / "Downloads"
+TEMP_PATH = Path("temp")
+
+# Crear carpeta temp si no existe
+TEMP_PATH.mkdir(exist_ok=True)
+
+# --- FUNCIONES DE AUTOMATIZACIÓN ---
+
+def limpiar_temp():
+    """Limpia la carpeta temp completamente"""
+    if TEMP_PATH.exists():
+        shutil.rmtree(TEMP_PATH)
+    TEMP_PATH.mkdir(exist_ok=True)
+    print("🗑️ Carpeta temp limpiada")
+
+def obtener_downloads_recientes(segundos=60):
+    """Obtiene archivos de imagen descargados recientemente"""
+    ahora = time.time()
+    archivos_recientes = []
+
+    # Extensiones soportadas (ahora incluye AVIF)
+    extensiones = ['*.jpg', '*.jpeg', '*.png', '*.webp', '*.gif', '*.bmp', '*.avif', '*.heif']
+
+    for extension in extensiones:
+        patron = DOWNLOADS_PATH / extension
+        for archivo in glob.glob(str(patron)):
+            archivo_path = Path(archivo)
+            tiempo_modificacion = archivo_path.stat().st_mtime
+
+            if ahora - tiempo_modificacion <= segundos:
+                archivos_recientes.append({
+                    'path': archivo_path,
+                    'name': archivo_path.name,
+                    'time': tiempo_modificacion
+                })
+
+    # Ordenar por tiempo de modificación (más reciente primero)
+    archivos_recientes.sort(key=lambda x: x['time'], reverse=True)
+    return archivos_recientes
+
+def renombrar_y_mover_imagen(archivo_original, nuevo_nombre, tipo="producto"):
+    """Renombra y mueve imagen de Downloads a temp/"""
+    try:
+        # Crear nombre sugerido inteligente
+        base_name = archivo_original['name'].lower()
+        extension = Path(base_name).suffix
+
+        # Limpiar nombre para evitar caracteres problemáticos
+        nombre_limpio = nuevo_nombre.lower().replace(' ', '_').replace(':', '').replace('"', '').replace("'", '').replace('?', '').replace('/', '').replace('\\', '')
+
+        if tipo == "producto":
+            nombre_sugerido = f"producto_{nombre_limpio}{extension}"
+        else:
+            nombre_sugerido = f"fondo_{nombre_limpio}{extension}"
+
+        print(f"\n📝 Archivo encontrado: {archivo_original['name']}")
+        respuesta = input(f"➡️ ¿Renombrar como '{nombre_sugerido}'? (s/n): ").lower()
+
+        if respuesta != 's':
+            nombre_personalizado = input("➡️ Escribe el nombre que quieres: ")
+            nombre_sugerido = f"{nombre_personalizado}{extension}"
+
+        # Ruta destino en temp/
+        destino = TEMP_PATH / nombre_sugerido
+
+        # Mover archivo
+        shutil.move(str(archivo_original['path']), str(destino))
+        print(f"✅ Movido a: temp/{nombre_sugerido}")
+
+        return str(destino)
+
+    except Exception as e:
+        print(f"❌ Error moviendo archivo: {e}")
+        return None
+
+def abrir_con_selenium(url, tipo="producto"):
+    """Abre URL con Selenium y controla el cierre automático"""
+    try:
+        # Configurar Chrome en modo silencioso
+        chrome_options = Options()
+        chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument("--disable-popup-blocking")
+        chrome_options.add_argument("--disable-web-security")
+        chrome_options.add_argument("--allow-running-insecure-content")
+
+        # Crear servicio con webdriver-manager
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.get(url)
+
+        print(f"🌐 Se abrió Google Images para {tipo}")
+        print("👁️ Ve las imágenes y elige la mejor")
+        print("💾 Haz clic derecho → 'Guardar imagen' (cualquier nombre)")
+
+        return driver
+
+    except Exception as e:
+        print(f"❌ Error con Selenium: {e}")
+        print("🔄 Usando método fallback...")
+        webbrowser.open(url)
+        return None
+
 # --- FUNCIONES AUXILIARES ---
 
-def buscar_imagenes_simple(termino_busqueda, tipo="producto"):
-    """Método directo: abre Google Images y permite descarga manual rápida"""
+def buscar_imagenes_automatizada(termino_busqueda, tipo="producto"):
+    """Método automatizado: detecta descargas y cierra pestañas"""
     print(f"🔎 Buscando imágenes para: '{termino_busqueda}'...")
 
-    # Abrir directamente Google Images
+    # Abrir Google Images con Selenium
     search_url = f"https://www.google.com/search?tbm=isch&q={termino_busqueda.replace(' ', '+')}"
+    driver = abrir_con_selenium(search_url, tipo)
 
-    try:
-        webbrowser.open(search_url)
-        print("🌐 Se abrió Google Images en tu navegador")
-        print("👁️ Ve las imágenes y elige la mejor")
+    # Esperar a que descargue
+    print(f"\n⏸️ Descarga la imagen de {tipo} y presiona ENTER...")
+    input()
 
-    except:
-        print("❌ No se pudo abrir el navegador automáticamente")
+    # Detectar descarga reciente
+    print("🤖 Detectando descarga reciente...")
+    archivos_recientes = obtener_downloads_recientes(30)  # Últimos 30 segundos
 
-    return buscar_descarga_rapida(termino_busqueda, tipo)
+    if not archivos_recientes:
+        print("❌ No se encontraron descargas recientes")
+        if driver:
+            driver.quit()
+        return None
+
+    # Renombrar y mover
+    archivo_elegido = archivos_recientes[0]  # El más reciente
+    archivo_final = renombrar_y_mover_imagen(archivo_elegido, termino_busqueda, tipo)
+
+    # Cerrar pestaña automáticamente
+    if driver:
+        print("❌ Cerrando pestaña automáticamente...")
+        driver.quit()
+        print("✅ Pestaña cerrada")
+
+    if archivo_final:
+        return [{'url': archivo_final, 'title': f'Imagen automatizada - {tipo}', 'width': 0, 'height': 0}]
+    else:
+        return None
 
 def buscar_descarga_rapida(termino_busqueda, nombre_sugerido="producto"):
     """Método de descarga rápida guiada"""
@@ -316,9 +453,9 @@ def buscar_imagenes_respaldo(termino_busqueda):
 
     return []
 
-def mostrar_opciones_y_descargar(termino_busqueda, nombre_archivo, tipo="producto"):
-    """Busca imágenes, las abre en navegador y permite elegir"""
-    imagenes = buscar_imagenes_simple(termino_busqueda, tipo)
+def mostrar_opciones_y_descargar_automatizado(termino_busqueda, nombre_archivo, tipo="producto"):
+    """Método automatizado: detecta, renombra y mueve automáticamente"""
+    imagenes = buscar_imagenes_automatizada(termino_busqueda, tipo)
 
     if not imagenes:
         print("❌ No se encontraron imágenes.")
@@ -427,22 +564,40 @@ def main():
     precio_producto = input("➡️ Ingresa el precio (ej: 125.00): ")
     tema_fondo = input("➡️ Ingresa un tema para el fondo (ej: Dragon Ball Z landscape): ")
 
-    # 2. BÚSQUEDA Y DESCARGA DE IMÁGENES
+    # 2. LIMPIEZA Y PREPARACIÓN
+    print("\n🗑️ Preparando entorno...")
+    limpiar_temp()
+
+    # 3. BÚSQUEDA Y DESCARGA AUTOMATIZADA
     print("\n🛍️ Buscando imagen del producto...")
-    if not mostrar_opciones_y_descargar(f"{nombre_producto} fondo blanco", "producto_original.png", "producto"):
+    if not mostrar_opciones_y_descargar_automatizado(f"{nombre_producto} fondo blanco", "producto_original.png", "producto"):
         return # Si no se puede descargar, detenemos el script
 
     print("\n🎨 Buscando imagen de fondo...")
-    if not mostrar_opciones_y_descargar(f"{tema_fondo} wallpaper 4k", "fondo.jpg", "fondo"):
+    if not mostrar_opciones_y_descargar_automatizado(f"{tema_fondo} wallpaper 4k", "fondo.jpg", "fondo"):
         return
 
     # 3. PROCESAMIENTO Y COMPOSICIÓN DE LA IMAGEN
     print("🎨 Creando la imagen del post...")
     
-    # Abrimos las imágenes que descargamos
+    # Encontrar y abrir las imágenes desde temp/
     try:
-        input_producto = Image.open("producto_original.png")
-        fondo = Image.open("fondo.jpg")
+        # Buscar archivo de producto en temp/
+        archivos_producto = list(TEMP_PATH.glob("producto_*"))
+        archivos_fondo = list(TEMP_PATH.glob("fondo_*"))
+
+        if not archivos_producto:
+            print("❌ Error: No se encontró imagen de producto en temp/")
+            return
+        if not archivos_fondo:
+            print("❌ Error: No se encontró imagen de fondo en temp/")
+            return
+
+        print(f"📂 Cargando producto: {archivos_producto[0].name}")
+        print(f"📂 Cargando fondo: {archivos_fondo[0].name}")
+
+        input_producto = Image.open(archivos_producto[0])
+        fondo = Image.open(archivos_fondo[0])
 
         # Creamos un logo simple si no existe
         if not os.path.exists("logo.png"):
@@ -524,6 +679,14 @@ def main():
     print(f"🎉 ¡Éxito! La imagen ha sido creada.")
     print(f"Busca el archivo: '{nombre_final}' en tu carpeta.")
     print("---------------------------------")
+
+    # Preguntar si limpiar temp/
+    respuesta = input("\n❓ ¿Estás contenta con el resultado? ¿Limpiar archivos temporales? (s/n): ").lower()
+    if respuesta == 's':
+        limpiar_temp()
+        print("✅ ¡Proceso completado y archivos temporales limpiados!")
+    else:
+        print("📁 Archivos temporales guardados en carpeta temp/ por si quieres reutilizarlos")
 
 
 # Esto hace que la función main() se ejecute cuando corres el script
