@@ -461,40 +461,11 @@ def mostrar_opciones_y_descargar_automatizado(termino_busqueda, nombre_archivo, 
         print("❌ No se encontraron imágenes.")
         return False
 
-    print(f"\n🌐 Abriendo las primeras {len(imagenes)} imágenes en tu navegador...")
-    print("👀 Revisa las pestañas que se abrieron y elige la mejor imagen")
+    # Como solo hay una imagen (la que descargaste), procesarla directamente
+    imagen_elegida = imagenes[0]
+    print(f"✅ Procesando imagen automatizada: {imagen_elegida['title']}")
 
-    # Abre las primeras 5 imágenes en el navegador
-    for i, img in enumerate(imagenes[:5], 1):
-        try:
-            webbrowser.open(img['url'])
-        except:
-            print(f"❌ No se pudo abrir imagen {i}")
-
-    print(f"\n📋 Opciones disponibles:")
-    print("-" * 60)
-
-    for i, img in enumerate(imagenes, 1):
-        size_info = f"({img['width']}x{img['height']})" if img['width'] > 0 else ""
-        print(f"{i}. {img['title']} {size_info}")
-
-    print("-" * 60)
-
-    while True:
-        try:
-            opcion = input(f"➡️ ¿Cuál imagen te gustó? Elige un número (1-{len(imagenes)}): ")
-            indice = int(opcion) - 1
-
-            if 0 <= indice < len(imagenes):
-                imagen_elegida = imagenes[indice]
-                return descargar_imagen(imagen_elegida['url'], nombre_archivo)
-            else:
-                print(f"❌ Por favor elige un número entre 1 y {len(imagenes)}")
-        except ValueError:
-            print("❌ Por favor ingresa un número válido")
-        except KeyboardInterrupt:
-            print("\n❌ Búsqueda cancelada")
-            return False
+    return descargar_imagen(imagen_elegida['url'], nombre_archivo)
 
 def descargar_imagen(url, nombre_archivo):
     """Descarga una imagen desde una URL o copia archivo local"""
@@ -671,8 +642,9 @@ def main():
     )
     draw.text((pos_precio_x, pos_precio_y), texto_precio, font=font, fill="white")
 
-    # Guardamos la imagen final
-    nombre_final = f"{nombre_producto.replace(' ', '_').lower()}_post.png"
+    # Guardamos la imagen final (limpiar caracteres problemáticos)
+    nombre_limpio = nombre_producto.lower().replace(' ', '_').replace(':', '').replace('"', '').replace("'", '').replace('?', '').replace('/', '').replace('\\', '')
+    nombre_final = f"{nombre_limpio}_post.png"
     lienzo.save(nombre_final)
     
     print("\n---------------------------------")
